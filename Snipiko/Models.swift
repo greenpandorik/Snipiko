@@ -200,6 +200,81 @@ enum AnnotationStyle {
     private static func widthKey(_ tool: EditorTool) -> String { "annotationWidth.\(tool.rawValue)" }
 }
 
+/// Stock sounds usable as a shutter click.
+enum CaptureSound {
+    static let defaultName = "Tink"
+
+    /// Names of the sounds shipped in /System/Library/Sounds, as `NSSound(named:)`
+    /// expects them. Read from disk rather than hardcoded, since the set differs
+    /// between macOS releases.
+    static let available: [String] = {
+        let directory = URL(fileURLWithPath: "/System/Library/Sounds")
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        return files
+            .filter { $0.pathExtension.lowercased() == "aiff" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .sorted()
+    }()
+
+    static func play(_ name: String?) {
+        guard let name, let sound = NSSound(named: name) else { return }
+        sound.stop()
+        sound.play()
+    }
+}
+
+/// Pattern for naming saved files.
+enum FilenameTemplate {
+    static let `default` = "Snipiko-{date}-{time}"
+
+    /// Token, what it produces, shown in Settings so the syntax is discoverable.
+    static let tokens: [(token: String, meaning: String)] = [
+        ("{date}", "дата, 2026-09-16"),
+        ("{time}", "время, 14.05.33"),
+        ("{width}", "ширина в пикселях"),
+        ("{height}", "высота в пикселях"),
+        ("{n}", "счётчик, растёт с каждым снимком")
+    ]
+
+    /// Fills the template. Anything a file name cannot contain is replaced, and an
+    /// empty result falls back to the default, so a template cannot produce an
+    /// unopenable file.
+    static func filename(_ template: String, width: Int, height: Int, date: Date = Date(), counter: Int) -> String {
+        let filled = template
+            .replacingOccurrences(of: "{date}", with: dateFormatter.string(from: date))
+            .replacingOccurrences(of: "{time}", with: timeFormatter.string(from: date))
+            .replacingOccurrences(of: "{width}", with: String(width))
+            .replacingOccurrences(of: "{height}", with: String(height))
+            .replacingOccurrences(of: "{n}", with: String(counter))
+
+        let cleaned = filled
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|\0"))
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return cleaned.isEmpty ? "Snipiko" : cleaned
+    }
+
+    /// A monotonically growing number for `{n}`, kept across launches.
+    static func nextCounter() -> Int {
+        let next = UserDefaults.standard.integer(forKey: "filenameCounter") + 1
+        UserDefaults.standard.set(next, forKey: "filenameCounter")
+        return next
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH.mm.ss"
+        return formatter
+    }()
+}
+
 enum ExportFormat: String, CaseIterable, Identifiable {
     case png, jpeg
     var id: String { rawValue }
@@ -217,6 +292,17 @@ final class AppSettings: ObservableObject {
     @Published var jpegQuality: Double = 0.9 { didSet { UserDefaults.standard.set(jpegQuality, forKey: "jpegQuality") } }
     @Published var autoSave = false { didSet { UserDefaults.standard.set(autoSave, forKey: "autoSave") } }
     @Published private(set) var autoSaveFolder: URL?
+    @Published var includeCursor = false { didSet { UserDefaults.standard.set(includeCursor, forKey: "includeCursor") } }
+    @Published var flashOnCapture = true { didSet { UserDefaults.standard.set(flashOnCapture, forKey: "flashOnCapture") } }
+    /// Name of a sound in /System/Library/Sounds, or nil for silence. The shutter
+    /// sound macOS itself uses lives inside the system Screenshot app and is not
+    /// reachable from a sandboxed process, so one of the stock sounds stands in.
+    @Published var captureSound: String? = CaptureSound.defaultName {
+        didSet { UserDefaults.standard.set(captureSound, forKey: "captureSound") }
+    }
+    @Published var filenameTemplate = FilenameTemplate.default {
+        didSet { UserDefaults.standard.set(filenameTemplate, forKey: "filenameTemplate") }
+    }
 
     private init() {
         shortcuts[.captureArea] = .captureArea
@@ -234,6 +320,16 @@ final class AppSettings: ObservableObject {
         if let raw = UserDefaults.standard.string(forKey: "exportFormat"), let format = ExportFormat(rawValue: raw) { exportFormat = format }
         if UserDefaults.standard.object(forKey: "jpegQuality") != nil { jpegQuality = UserDefaults.standard.double(forKey: "jpegQuality") }
         autoSave = UserDefaults.standard.bool(forKey: "autoSave")
+        includeCursor = UserDefaults.standard.bool(forKey: "includeCursor")
+        if UserDefaults.standard.object(forKey: "flashOnCapture") != nil {
+            flashOnCapture = UserDefaults.standard.bool(forKey: "flashOnCapture")
+        }
+        if UserDefaults.standard.object(forKey: "captureSound") != nil {
+            captureSound = UserDefaults.standard.string(forKey: "captureSound")
+        }
+        if let stored = UserDefaults.standard.string(forKey: "filenameTemplate"), !stored.isEmpty {
+            filenameTemplate = stored
+        }
         restoreAutoSaveFolder()
     }
 
@@ -266,11 +362,19 @@ final class AppSettings: ObservableObject {
         } catch { autoSaveFolder = nil }
     }
 
+    /// Name for a saved file, from the user's template.
+    func filename(width: Int, height: Int) -> String {
+        let base = FilenameTemplate.filename(
+            filenameTemplate, width: width, height: height, counter: FilenameTemplate.nextCounter()
+        )
+        return "\(base).\(exportFormat.fileExtension)"
+    }
+
     func autoSaveImage(_ image: CGImage) {
         guard autoSave, let folder = autoSaveFolder else { return }
         let access = folder.startAccessingSecurityScopedResource()
         defer { if access { folder.stopAccessingSecurityScopedResource() } }
-        let name = "Snipiko-\(HistoryStore.filenameFormatter.string(from: Date())).\(exportFormat.fileExtension)"
+        let name = filename(width: image.width, height: image.height)
         let url = folder.appendingPathComponent(name)
         if let data = ImageExporter.data(for: image, format: exportFormat, jpegQuality: jpegQuality) {
             try? data.write(to: url, options: .atomic)

@@ -174,7 +174,7 @@ struct EditorView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    if let image = model.renderedImage() { AppController.shared.save(image, suggestedName: filename) }
+                    if let image = model.renderedImage() { AppController.shared.save(image) }
                 } label: { Label("Сохранить", systemImage: "square.and.arrow.down") }
                 Button {
                     if let image = model.renderedImage() { AppController.shared.processEditedImage(image) }

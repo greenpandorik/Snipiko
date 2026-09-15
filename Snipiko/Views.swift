@@ -148,7 +148,7 @@ struct CapturePreviewView: View {
                 .buttonStyle(.borderedProminent)
                 Button {
                     if let image = item.image?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                        AppController.shared.save(image, suggestedName: item.filename)
+                        AppController.shared.save(image)
                     }
                 } label: { Image(systemName: "square.and.arrow.down") }
                     .buttonStyle(.bordered)
@@ -393,6 +393,43 @@ private struct CaptureSettings: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
+        SettingsGroup(title: "Съёмка", footer: "Курсор попадает в кадр во всех режимах — области, окна и экрана.") {
+            Toggle("Показывать курсор на снимке", isOn: $settings.includeCursor)
+            Toggle("Обводить снятую область", isOn: $settings.flashOnCapture)
+            HStack {
+                Toggle("Звук затвора", isOn: Binding(
+                    get: { settings.captureSound != nil },
+                    set: { settings.captureSound = $0 ? CaptureSound.defaultName : nil }
+                ))
+                Spacer()
+                Picker("Звук", selection: Binding(
+                    get: { settings.captureSound ?? CaptureSound.defaultName },
+                    set: { settings.captureSound = $0 }
+                )) {
+                    ForEach(CaptureSound.available, id: \.self) { name in Text(name).tag(name) }
+                }
+                .labelsHidden()
+                .frame(width: 130)
+                .disabled(settings.captureSound == nil)
+                Button {
+                    CaptureSound.play(settings.captureSound ?? CaptureSound.defaultName)
+                } label: { Image(systemName: "play.circle") }
+                .buttonStyle(.plain)
+                .help("Прослушать")
+            }
+        }
+        SettingsGroup(title: "Имя файла", footer: filenameFooter) {
+            TextField("Шаблон", text: $settings.filenameTemplate)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Text("Пример:").foregroundStyle(.secondary)
+                Text(examplePreview).monospaced()
+                Spacer()
+                Button("По умолчанию") { settings.filenameTemplate = FilenameTemplate.default }
+                    .disabled(settings.filenameTemplate == FilenameTemplate.default)
+            }
+            .font(.caption)
+        }
         SettingsGroup(title: "Формат файлов", footer: "Снимок всегда попадает в буфер обмена в PNG; формат влияет на сохранение в файл.") {
             HStack {
                 Text("Формат")
@@ -425,6 +462,22 @@ private struct CaptureSettings: View {
             }
             .disabled(!settings.autoSave)
         }
+    }
+
+    private var filenameFooter: String {
+        "Подстановки: " + FilenameTemplate.tokens.map { "\($0.token) — \($0.meaning)" }.joined(separator: ", ")
+            + ". Применяется к автосохранению и к диалогу сохранения."
+    }
+
+    /// Rendered with the counter left alone, so opening Settings does not advance it.
+    private var examplePreview: String {
+        let base = FilenameTemplate.filename(
+            settings.filenameTemplate,
+            width: 1280,
+            height: 800,
+            counter: UserDefaults.standard.integer(forKey: "filenameCounter") + 1
+        )
+        return "\(base).\(settings.exportFormat.fileExtension)"
     }
 }
 

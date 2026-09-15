@@ -42,7 +42,11 @@ final class CaptureService {
               let display = content.displays.first(where: { $0.displayID == mainID }) ?? content.displays.first else {
             throw CaptureError.displayUnavailable
         }
-        return try await captureWhole(display)
+        let image = try await captureWhole(display)
+        // After the capture, never before: the flash panel sits at screenSaver level
+        // and would be photographed along with the screen.
+        if let screen = screen(for: display) { WindowManager.shared.flash(screen.frame) }
+        return image
     }
 
     func captureAllDisplays() async throws -> CGImage {
@@ -89,6 +93,7 @@ final class CaptureService {
         }
 
         guard let composed = context.makeImage() else { throw CaptureError.captureFailed }
+        for screen in NSScreen.screens { WindowManager.shared.flash(screen.frame) }
         return composed
     }
 
@@ -102,7 +107,7 @@ final class CaptureService {
         let config = SCStreamConfiguration()
         config.width = max(1, Int(CGFloat(display.width) * scale))
         config.height = max(1, Int(CGFloat(display.height) * scale))
-        config.showsCursor = false
+        config.showsCursor = AppSettings.shared.includeCursor
         config.captureResolution = .best
         let filter = SCContentFilter(display: display, excludingWindows: [])
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
@@ -160,10 +165,12 @@ final class CaptureService {
         config.sourceRect = sourceRect
         config.width = max(1, Int(rect.width * scale))
         config.height = max(1, Int(rect.height * scale))
-        config.showsCursor = false
+        config.showsCursor = AppSettings.shared.includeCursor
         config.captureResolution = .best
         let filter = SCContentFilter(display: display, excludingWindows: [])
-        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        WindowManager.shared.flash(selection.rect)
+        return image
     }
 
     func availableWindows() async throws -> [SCWindow] {
@@ -184,10 +191,20 @@ final class CaptureService {
         let scale = screen(for: window.frame)?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         config.width = max(1, Int(window.frame.width * scale))
         config.height = max(1, Int(window.frame.height * scale))
-        config.showsCursor = false
+        config.showsCursor = AppSettings.shared.includeCursor
         config.captureResolution = .best
         let filter = SCContentFilter(desktopIndependentWindow: window)
-        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        if let primary = NSScreen.screens.first {
+            // SCWindow.frame counts y downward from the primary display's top edge.
+            WindowManager.shared.flash(CGRect(
+                x: window.frame.minX,
+                y: primary.frame.maxY - window.frame.maxY,
+                width: window.frame.width,
+                height: window.frame.height
+            ))
+        }
+        return image
     }
 }
 

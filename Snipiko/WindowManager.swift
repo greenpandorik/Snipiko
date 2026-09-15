@@ -50,11 +50,12 @@ final class AppController: ObservableObject {
         copyToClipboard(cgImage)
     }
 
-    func save(_ image: CGImage, suggestedName: String = "Snipiko.png") {
+    /// The suggested name comes from the user's template. History file names are
+    /// internal identifiers and mean nothing to whoever is picking a folder.
+    func save(_ image: CGImage) {
         let settings = AppSettings.shared
         let panel = NSSavePanel()
-        let base = (suggestedName as NSString).deletingPathExtension
-        panel.nameFieldStringValue = "\(base).\(settings.exportFormat.fileExtension)"
+        panel.nameFieldStringValue = settings.filename(width: image.width, height: image.height)
         panel.allowedContentTypes = [settings.exportFormat.contentType]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         if let data = ImageExporter.data(for: image, format: settings.exportFormat, jpegQuality: settings.jpegQuality) {
@@ -80,6 +81,7 @@ final class AppController: ObservableObject {
     }
 
     private func processCapturedImage(_ image: CGImage) {
+        CaptureSound.play(AppSettings.shared.captureSound)
         copyToClipboard(image)
         guard let item = HistoryStore.shared.add(image) else {
             WindowManager.shared.showError("Снимок скопирован, но не сохранился в истории.")
@@ -302,6 +304,48 @@ final class WindowManager: NSObject, NSWindowDelegate {
     func dismissPreview() {
         previewDismissTask?.cancel()
         previewPanel?.orderOut(nil)
+    }
+
+    /// Outlines the area just captured and fades the outline out.
+    ///
+    /// Deliberately an outline and not a wash of colour: it says exactly what was
+    /// taken without repainting the screen. `rect` is in global AppKit coordinates.
+    func flash(_ rect: CGRect) {
+        guard AppSettings.shared.flashOnCapture, rect.width > 2, rect.height > 2 else { return }
+        let panel = NSPanel(
+            contentRect: rect,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.setFrame(rect, display: false)
+        panel.level = .screenSaver
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.backgroundColor = .clear
+
+        let outline = NSView(frame: NSRect(origin: .zero, size: rect.size))
+        outline.wantsLayer = true
+        outline.layer?.borderWidth = 2
+        outline.layer?.borderColor = NSColor.white.cgColor
+        outline.layer?.cornerRadius = 4
+        // A hairline of shadow keeps the outline readable over white content too.
+        outline.layer?.shadowColor = NSColor.black.cgColor
+        outline.layer?.shadowOpacity = 0.55
+        outline.layer?.shadowRadius = 2
+        outline.layer?.shadowOffset = .zero
+        panel.contentView = outline
+
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.5
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 0
+        } completionHandler: {
+            panel.orderOut(nil)
+        }
     }
 
     func showError(_ message: String) {
