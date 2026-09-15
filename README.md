@@ -53,8 +53,14 @@ Snipiko runs in the macOS menu bar. Closing its windows leaves it running; use *
 - Area, window, and display capture through ScreenCaptureKit, at native Retina resolution
 - All-displays capture, composited into a single image in the real monitor layout
 - Automatic clipboard copy and a dismissible preview
-- Local history limited to 50 screenshots
-- Configurable global shortcuts without Accessibility permission
+- Pin a capture on top of every window, with adjustable opacity
+- Text recognition on a capture through on-device Vision, nothing leaves the Mac
+- Share straight from the preview via AirDrop, Mail and the rest
+- Local history with search, favourites that are never trimmed, and a configurable size
+- Configurable global shortcuts without Accessibility permission, with conflict warnings and a live check
+- Optional shutter sound and an outline tracing the captured area
+- Filename template with date, time, size and counter tokens
+- Windows sized from the display they open on, remembering where you left them
 - Annotation editor with arrows, rectangles, text, highlighting, opaque redaction, cropping, undo, and redo
 - Optional Launch at Login
 - Screen Recording permission onboarding and recovery
@@ -115,8 +121,14 @@ Snipiko живёт в строке меню macOS. Закрытие окон н�
 - Съёмка области, окна и целого экрана через ScreenCaptureKit в родном разрешении Retina
 - Снимок всех мониторов сразу — склеивается в одно изображение по реальному расположению экранов
 - Автоматическое копирование в буфер обмена и превью, которое можно закрыть
-- Локальная история на 50 последних скриншотов
-- Настраиваемые глобальные горячие клавиши без разрешения Accessibility
+- Закрепление снимка поверх всех окон с регулируемой прозрачностью
+- Распознавание текста на снимке через системный Vision — ничего не уходит с компьютера
+- Отправка прямо из превью: AirDrop, Почта и остальное
+- Локальная история с поиском, избранным, которое не удаляется, и настраиваемым размером
+- Настраиваемые глобальные горячие клавиши без разрешения Accessibility, с предупреждением о конфликтах и живой проверкой
+- Необязательный звук затвора и обводка снятой области
+- Шаблон имени файла с подстановками даты, времени, размера и счётчика
+- Размер окон считается от экрана, на котором они открываются, и запоминается
 - Редактор разметки: стрелки, прямоугольники, текст, выделение маркером, непрозрачное затирание, обрезка, отмена и повтор действия
 - Опциональный автозапуск при входе в систему
 - Онбординг и восстановление разрешения на запись экрана

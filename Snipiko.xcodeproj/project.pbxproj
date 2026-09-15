@@ -11,6 +11,7 @@
 		A10000000000000000000004 /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* WindowManager.swift */; };
 		A10000000000000000000005 /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* Views.swift */; };
 		A10000000000000000000006 /* Editor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* Editor.swift */; };
+		A10000000000000000000007 /* Pinning.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* Pinning.swift */; };
 
 		A20000000000000000000001 /* SnipikoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnipikoApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -18,6 +19,7 @@
 		A20000000000000000000004 /* WindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManager.swift; sourceTree = "<group>"; };
 		A20000000000000000000005 /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
 		A20000000000000000000006 /* Editor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* Pinning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pinning.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* Snipiko.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Snipiko.app; sourceTree = BUILT_PRODUCTS_DIR; };
 
 		A30000000000000000000001 = {
@@ -37,6 +39,7 @@
 				A20000000000000000000004 /* WindowManager.swift */,
 				A20000000000000000000005 /* Views.swift */,
 				A20000000000000000000006 /* Editor.swift */,
+				A20000000000000000000007 /* Pinning.swift */,
 			);
 			path = Snipiko;
 			sourceTree = "<group>";
@@ -58,6 +61,7 @@
 				A10000000000000000000004 /* WindowManager.swift in Sources */,
 				A10000000000000000000005 /* Views.swift in Sources */,
 				A10000000000000000000006 /* Editor.swift in Sources */,
+				A10000000000000000000007 /* Pinning.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

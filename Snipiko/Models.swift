@@ -11,6 +11,9 @@ struct CaptureItem: Identifiable, Codable, Hashable {
     let filename: String
     let width: Int
     let height: Int
+    /// Favourites survive the history limit and are never trimmed automatically.
+    /// Decoded with a default so histories written before this existed still load.
+    var isFavourite = false
 
     var url: URL { HistoryStore.capturesDirectoryURL.appendingPathComponent(filename) }
     var image: NSImage? { NSImage(contentsOf: url) }
@@ -44,15 +47,39 @@ final class HistoryStore: ObservableObject {
         do {
             try data.write(to: item.url, options: .atomic)
             items.insert(item, at: 0)
-            while items.count > 50 {
-                let old = items.removeLast()
-                try? FileManager.default.removeItem(at: old.url)
-            }
+            trim()
             save()
             return item
         } catch {
             return nil
         }
+    }
+
+    /// Drops the oldest ordinary captures past the limit. Favourites are skipped
+    /// entirely, so marking one is a promise that it stays.
+    private func trim() {
+        let limit = AppSettings.shared.historyLimit
+        var ordinary = items.filter { !$0.isFavourite }.count
+        guard ordinary > limit else { return }
+        for item in items.reversed() where ordinary > limit {
+            guard !item.isFavourite else { continue }
+            try? FileManager.default.removeItem(at: item.url)
+            items.removeAll { $0.id == item.id }
+            ordinary -= 1
+        }
+    }
+
+    func setFavourite(_ isFavourite: Bool, for item: CaptureItem) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[index].isFavourite = isFavourite
+        if !isFavourite { trim() }
+        save()
+    }
+
+    /// Applies the limit after it is changed in Settings.
+    func applyHistoryLimit() {
+        trim()
+        save()
     }
 
     func delete(_ item: CaptureItem) {
@@ -61,9 +88,13 @@ final class HistoryStore: ObservableObject {
         save()
     }
 
+    /// Clears everything except favourites -- losing a deliberately kept capture to
+    /// a single button would be the worst kind of surprise.
     func clear() {
-        for item in items { try? FileManager.default.removeItem(at: item.url) }
-        items.removeAll()
+        for item in items where !item.isFavourite {
+            try? FileManager.default.removeItem(at: item.url)
+        }
+        items.removeAll { !$0.isFavourite }
         save()
     }
 
@@ -303,6 +334,10 @@ final class AppSettings: ObservableObject {
     @Published var filenameTemplate = FilenameTemplate.default {
         didSet { UserDefaults.standard.set(filenameTemplate, forKey: "filenameTemplate") }
     }
+    /// How many non-favourite captures the history keeps.
+    @Published var historyLimit = 50 {
+        didSet { UserDefaults.standard.set(historyLimit, forKey: "historyLimit") }
+    }
 
     private init() {
         shortcuts[.captureArea] = .captureArea
@@ -330,6 +365,8 @@ final class AppSettings: ObservableObject {
         if let stored = UserDefaults.standard.string(forKey: "filenameTemplate"), !stored.isEmpty {
             filenameTemplate = stored
         }
+        let storedLimit = UserDefaults.standard.integer(forKey: "historyLimit")
+        if storedLimit > 0 { historyLimit = storedLimit }
         restoreAutoSaveFolder()
     }
 

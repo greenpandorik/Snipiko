@@ -115,6 +115,32 @@ struct PermissionView: View {
 struct CapturePreviewView: View {
     let item: CaptureItem
     @State private var copied = true
+    @State private var sharing = false
+    @State private var recognizing = false
+    @State private var recognitionNote: String?
+
+    private func recognizeText() {
+        guard let image = item.image?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        recognizing = true
+        recognitionNote = nil
+        WindowManager.shared.holdPreview()
+        Task {
+            defer { recognizing = false }
+            do {
+                let text = try await TextRecognizer.recognize(in: image)
+                guard !text.isEmpty else {
+                    recognitionNote = "Текст на снимке не найден."
+                    return
+                }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                let lines = text.split(separator: "\n").count
+                recognitionNote = "Скопировано строк: \(lines)."
+            } catch {
+                recognitionNote = "Не удалось распознать текст."
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -147,15 +173,31 @@ struct CapturePreviewView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 Button {
-                    if let image = item.image?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                        AppController.shared.save(image)
-                    }
-                } label: { Image(systemName: "square.and.arrow.down") }
+                    guard let image = item.image else { return }
+                    WindowManager.shared.dismissPreview()
+                    PinnedCaptures.shared.pin(image)
+                } label: { Image(systemName: "pin") }
                     .buttonStyle(.bordered)
-                    .help("Сохранить копию")
+                    .help("Закрепить поверх экрана")
+                Button { recognizeText() } label: {
+                    Image(systemName: recognizing ? "hourglass" : "text.viewfinder")
+                }
+                .buttonStyle(.bordered)
+                .disabled(recognizing)
+                .help("Скопировать текст со снимка")
+                Button { sharing = true } label: { Image(systemName: "square.and.arrow.up") }
+                    .buttonStyle(.bordered)
+                    .help("Поделиться")
+                    .background(SharePicker(isPresented: $sharing, items: [item.url]))
                 Button { WindowManager.shared.dismissPreview() } label: { Image(systemName: "xmark") }
                     .buttonStyle(.bordered)
                     .help("Закрыть превью")
+            }
+            if let recognitionNote {
+                Text(recognitionNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 6)
             }
         }
         // An explicit width is what makes the thumbnail exist at all: inside a
@@ -178,29 +220,48 @@ struct CapturePreviewView: View {
 struct HistoryView: View {
     @ObservedObject private var history = HistoryStore.shared
     @State private var selection: CaptureItem.ID?
+    @State private var query = ""
+    @State private var favouritesOnly = false
+    @State private var sharing = false
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("История").font(.title2.weight(.semibold))
                 Spacer()
+                Toggle(isOn: $favouritesOnly) {
+                    Label("Только избранное", systemImage: "star")
+                }
+                .toggleStyle(.button)
+                .help("Показывать только отмеченные снимки")
                 Button("Очистить", role: .destructive) { history.clear() }
-                    .disabled(history.items.isEmpty)
+                    .disabled(history.items.allSatisfy(\.isFavourite))
+                    .help("Удаляет всё, кроме избранного")
             }
             .padding(20)
 
             Divider()
-            if history.items.isEmpty {
-                ContentUnavailableView("Снимков пока нет", systemImage: "photo.on.rectangle.angled", description: Text("Новый снимок появится здесь автоматически."))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if filtered.isEmpty {
+                ContentUnavailableView(
+                    emptyTitle,
+                    systemImage: query.isEmpty ? "photo.on.rectangle.angled" : "magnifyingglass",
+                    description: Text(emptyDescription)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $selection) {
-                    ForEach(history.items) { item in
-                        HistoryRow(item: item)
+                    ForEach(filtered) { item in
+                        HistoryRow(item: item) { history.setFavourite(!item.isFavourite, for: item) }
                             .tag(item.id)
                             .contextMenu {
                                 Button("Открыть в редакторе") { WindowManager.shared.showEditor(item) }
                                 Button("Скопировать") { AppController.shared.copy(item) }
+                                Button("Закрепить поверх экрана") {
+                                    if let image = item.image { PinnedCaptures.shared.pin(image) }
+                                }
+                                Button(item.isFavourite ? "Убрать из избранного" : "В избранное") {
+                                    history.setFavourite(!item.isFavourite, for: item)
+                                }
                                 Divider()
                                 Button("Удалить", role: .destructive) { history.delete(item) }
                             }
@@ -209,6 +270,7 @@ struct HistoryView: View {
                 }
             }
         }
+        .searchable(text: $query, prompt: "Поиск по дате, размеру или имени файла")
         .frame(minWidth: 620, minHeight: 430)
         .toolbar {
             ToolbarItemGroup {
@@ -216,8 +278,45 @@ struct HistoryView: View {
                     .disabled(selectedItem == nil)
                 Button { if let item = selectedItem { AppController.shared.copy(item) } } label: { Label("Копировать", systemImage: "doc.on.doc") }
                     .disabled(selectedItem == nil)
+                Button {
+                    if let image = selectedItem?.image { PinnedCaptures.shared.pin(image) }
+                } label: { Label("Закрепить", systemImage: "pin") }
+                    .disabled(selectedItem == nil)
+                Button { sharing = true } label: { Label("Поделиться", systemImage: "square.and.arrow.up") }
+                    .disabled(selectedItem == nil)
+                    .background(SharePicker(isPresented: $sharing, items: selectedItem.map { [$0.url] } ?? []))
             }
         }
+    }
+
+    /// Matches the visible description of a capture rather than only its file name:
+    /// the name is an internal identifier, so searching "1280" or "09-16" is what
+    /// someone actually reaches for.
+    private var filtered: [CaptureItem] {
+        let base = favouritesOnly ? history.items.filter(\.isFavourite) : history.items
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return base }
+        return base.filter { item in
+            let haystack = [
+                item.filename,
+                HistoryStore.filenameFormatter.string(from: item.createdAt),
+                "\(item.width)x\(item.height)",
+                "\(item.width) × \(item.height)"
+            ].joined(separator: " ")
+            return haystack.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
+    private var emptyTitle: String {
+        if !query.isEmpty { return "Ничего не найдено" }
+        return favouritesOnly ? "В избранном пусто" : "Снимков пока нет"
+    }
+
+    private var emptyDescription: String {
+        if !query.isEmpty { return "Попробуйте другой запрос." }
+        return favouritesOnly
+            ? "Отметьте снимок звёздочкой, и он не будет удаляться при переполнении истории."
+            : "Новый снимок появится здесь автоматически."
     }
 
     private var selectedItem: CaptureItem? { history.items.first { $0.id == selection } }
@@ -225,6 +324,8 @@ struct HistoryView: View {
 
 private struct HistoryRow: View {
     let item: CaptureItem
+    let onToggleFavourite: () -> Void
+
     var body: some View {
         HStack(spacing: 14) {
             Group {
@@ -238,6 +339,12 @@ private struct HistoryRow: View {
                 Text("\(item.width) × \(item.height) · PNG").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            Button(action: onToggleFavourite) {
+                Image(systemName: item.isFavourite ? "star.fill" : "star")
+                    .foregroundStyle(item.isFavourite ? Color.yellow : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(item.isFavourite ? "Убрать из избранного" : "В избранное — снимок не будет удалён при переполнении")
         }
         .padding(.vertical, 5)
     }
@@ -296,13 +403,14 @@ struct SettingsView: View {
     /// handful, and more sections are coming. A section is only listed once it has
     /// content -- an empty "History" placeholder would be worse than its absence.
     private enum Section: String, CaseIterable, Identifiable {
-        case general, capture, shortcuts
+        case general, capture, shortcuts, history
         var id: String { rawValue }
         var title: String {
             switch self {
             case .general: "Основные"
             case .capture: "Съёмка"
             case .shortcuts: "Хоткеи"
+            case .history: "История"
             }
         }
         var symbol: String {
@@ -310,6 +418,7 @@ struct SettingsView: View {
             case .general: "switch.2"
             case .capture: "camera"
             case .shortcuts: "keyboard"
+            case .history: "clock.arrow.circlepath"
             }
         }
     }
@@ -330,6 +439,7 @@ struct SettingsView: View {
                     case .general: GeneralSettings()
                     case .capture: CaptureSettings()
                     case .shortcuts: ShortcutSettings()
+                    case .history: HistorySettings()
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -478,6 +588,45 @@ private struct CaptureSettings: View {
             counter: UserDefaults.standard.integer(forKey: "filenameCounter") + 1
         )
         return "\(base).\(settings.exportFormat.fileExtension)"
+    }
+}
+
+private struct HistorySettings: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var history = HistoryStore.shared
+
+    var body: some View {
+        SettingsGroup(
+            title: "Размер истории",
+            footer: "Когда обычных снимков становится больше лимита, самые старые удаляются. Отмеченные звёздочкой не удаляются никогда и в лимит не входят."
+        ) {
+            HStack {
+                Text("Хранить снимков")
+                Spacer()
+                Picker("Хранить снимков", selection: $settings.historyLimit) {
+                    ForEach([20, 50, 100, 250, 500], id: \.self) { Text("\($0)").tag($0) }
+                }
+                .labelsHidden()
+                .frame(width: 100)
+                .onChange(of: settings.historyLimit) { history.applyHistoryLimit() }
+            }
+            Divider()
+            HStack {
+                Text("Сейчас в истории")
+                Spacer()
+                Text("\(history.items.count), из них избранных \(history.items.filter(\.isFavourite).count)")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.callout)
+        }
+        SettingsGroup(title: "Закреплённые снимки", footer: "Закреплённый снимок висит поверх всех окон, пока его не откроют.") {
+            HStack {
+                Text("Открепить все")
+                Spacer()
+                Button("Открепить") { PinnedCaptures.shared.closeAll() }
+                    .disabled(!PinnedCaptures.shared.hasPinned)
+            }
+        }
     }
 }
 
