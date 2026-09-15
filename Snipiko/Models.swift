@@ -102,6 +102,44 @@ struct Shortcut: Codable, Equatable {
     }
 }
 
+/// Shortcuts macOS claims for itself, for warning before a combination is assigned.
+///
+/// The list is static by necessity. Snipiko is sandboxed, and the real table in
+/// `com.apple.symbolichotkeys` is unreachable from inside a container -- verified
+/// that `UserDefaults(suiteName:)`, `CFPreferencesCopyAppValue` and reading the
+/// plist directly all come back empty, because the home directory is redirected.
+///
+/// So this warns about the common cases and cannot know about combinations the
+/// user has remapped, nor about other applications. It never blocks an
+/// assignment; `HotKeyManager.probe(_:)` is what actually settles the question.
+enum SystemShortcuts {
+    private struct Known {
+        let keyCode: Int
+        let modifiers: Int
+        let owner: String
+    }
+
+    private static let known: [Known] = [
+        Known(keyCode: kVK_ANSI_3, modifiers: cmdKey | shiftKey, owner: "снимком всего экрана"),
+        Known(keyCode: kVK_ANSI_3, modifiers: cmdKey | shiftKey | controlKey, owner: "снимком экрана в буфер"),
+        Known(keyCode: kVK_ANSI_4, modifiers: cmdKey | shiftKey, owner: "снимком области"),
+        Known(keyCode: kVK_ANSI_4, modifiers: cmdKey | shiftKey | controlKey, owner: "снимком области в буфер"),
+        Known(keyCode: kVK_ANSI_5, modifiers: cmdKey | shiftKey, owner: "панелью съёмки экрана"),
+        Known(keyCode: kVK_Space, modifiers: cmdKey, owner: "Spotlight"),
+        Known(keyCode: kVK_Space, modifiers: controlKey, owner: "сменой раскладки"),
+        Known(keyCode: kVK_Tab, modifiers: cmdKey, owner: "переключением программ"),
+        Known(keyCode: kVK_ANSI_Q, modifiers: cmdKey, owner: "выходом из программы"),
+        Known(keyCode: kVK_ANSI_W, modifiers: cmdKey, owner: "закрытием окна")
+    ]
+
+    /// What macOS uses this combination for, or nil when it looks free.
+    static func owner(of shortcut: Shortcut) -> String? {
+        known.first {
+            UInt32($0.keyCode) == shortcut.keyCode && UInt32($0.modifiers) == shortcut.modifiers
+        }?.owner
+    }
+}
+
 enum ShortcutAction: String, CaseIterable, Codable, Identifiable {
     // New cases go at the end: HotKeyManager derives hot-key ids from this order.
     case captureArea, captureWindow, captureDisplay, openHistory, captureAllDisplays
@@ -291,10 +329,21 @@ enum KeyName {
 }
 
 @MainActor
-final class HotKeyManager {
+final class HotKeyManager: ObservableObject {
     static let shared = HotKeyManager()
     private var refs: [EventHotKeyRef?] = []
     private var handler: EventHandlerRef?
+
+    /// Actions whose shortcut could not be registered. Previously the failure was
+    /// dropped on the floor, so a shortcut could sit in Settings looking assigned
+    /// while never firing.
+    @Published private(set) var failedRegistrations: Set<ShortcutAction> = []
+
+    /// While a shortcut is being tested, firing it records the hit instead of
+    /// running the action -- otherwise testing the area-capture shortcut would take
+    /// a screenshot on every press.
+    private var probedAction: ShortcutAction?
+    private var probeHit = false
 
     func registerAll() {
         unregisterAll()
@@ -304,19 +353,48 @@ final class HotKeyManager {
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
             Task { @MainActor in
                 guard let action = ShortcutAction.allCases[safe: Int(hotKeyID.id)] else { return }
-                AppController.shared.perform(action)
+                HotKeyManager.shared.handleFire(of: action)
             }
             return noErr
         }, 1, &eventType, nil, &handler)
 
+        var failures: Set<ShortcutAction> = []
         for (index, action) in ShortcutAction.allCases.enumerated() {
             guard let shortcut = AppSettings.shared.shortcuts[action] ?? nil else { continue }
             var ref: EventHotKeyRef?
             let id = EventHotKeyID(signature: OSType(0x534E4950), id: UInt32(index))
             if RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, id, GetApplicationEventTarget(), 0, &ref) == noErr {
                 refs.append(ref)
+            } else {
+                failures.insert(action)
             }
         }
+        failedRegistrations = failures
+    }
+
+    private func handleFire(of action: ShortcutAction) {
+        if probedAction == action {
+            probeHit = true
+            return
+        }
+        AppController.shared.perform(action)
+    }
+
+    /// Presses the shortcut for `action` reach Snipiko?
+    ///
+    /// `RegisterEventHotKey` reports success even for combinations macOS itself
+    /// owns -- verified on macOS 26.4 with Shift-Cmd-3/4/5 -- so the only reliable
+    /// answer comes from asking the user to press it and seeing whether it arrives.
+    func probe(_ action: ShortcutAction, timeout: Duration = .seconds(5)) async -> Bool {
+        probedAction = action
+        probeHit = false
+        defer { probedAction = nil }
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if probeHit { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return probeHit
     }
 
     func unregisterAll() {

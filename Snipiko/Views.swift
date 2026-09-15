@@ -292,90 +292,185 @@ struct WindowPickerView: View {
 }
 
 struct SettingsView: View {
-    @ObservedObject private var settings = AppSettings.shared
-    @State private var conflictMessage: String?
+    /// Sections live in a sidebar rather than tabs: tabs stop scaling past a
+    /// handful, and more sections are coming. A section is only listed once it has
+    /// content -- an empty "History" placeholder would be worse than its absence.
+    private enum Section: String, CaseIterable, Identifiable {
+        case general, capture, shortcuts
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .general: "Основные"
+            case .capture: "Съёмка"
+            case .shortcuts: "Хоткеи"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .general: "switch.2"
+            case .capture: "camera"
+            case .shortcuts: "keyboard"
+            }
+        }
+    }
+
+    @State private var selection: Section = .general
 
     var body: some View {
-        TabView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Горячие клавиши").font(.title2.weight(.semibold))
-                Text("Нажмите на сочетание, затем введите новое. Можно использовать F-клавишу либо сочетание с ⌘, ⌥ или ⌃.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                VStack(spacing: 0) {
-                    ForEach(ShortcutAction.allCases) { action in
-                        ShortcutRow(action: action, shortcut: settings.shortcuts[action] ?? nil) { shortcut in
-                            assign(shortcut, to: action)
-                        }
-                        if action != ShortcutAction.allCases.last { Divider() }
-                    }
-                }
-                .padding(.horizontal, 14)
-                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                if let conflictMessage {
-                    Label(conflictMessage, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-                HStack {
-                    Button("Сбросить назначения") { settings.resetShortcuts(); HotKeyManager.shared.registerAll() }
-                    Spacer()
-                }
-                Spacer()
+        NavigationSplitView {
+            List(Section.allCases, selection: $selection) { section in
+                Label(section.title, systemImage: section.symbol).tag(section)
             }
-            .padding(24)
-            .tabItem { Label("Хоткеи", systemImage: "keyboard") }
-
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Основные").font(.title2.weight(.semibold))
-                Toggle("Запускать Snipiko при входе", isOn: Binding(
-                    get: { settings.launchAtLogin },
-                    set: { settings.setLaunchAtLogin($0) }
-                ))
-                Divider()
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Доступ к записи экрана")
-                        Text(AppController.shared.hasScreenPermission ? "Разрешён" : "Не разрешён")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Системные настройки…") { ScreenPermission.openSettings() }
-                }
-                Divider()
-                HStack {
-                    Text("Формат сохранения")
-                    Spacer()
-                    Picker("Формат сохранения", selection: $settings.exportFormat) {
-                        ForEach(ExportFormat.allCases) { format in Text(format.title).tag(format) }
-                    }
-                    .labelsHidden()
-                    .frame(width: 110)
-                }
-                if settings.exportFormat == .jpeg {
-                    HStack {
-                        Text("Качество JPEG")
-                        Slider(value: $settings.jpegQuality, in: 0.5...1, step: 0.05)
-                        Text("\(Int(settings.jpegQuality * 100))%")
-                            .monospacedDigit().foregroundStyle(.secondary).frame(width: 38, alignment: .trailing)
+            .navigationSplitViewColumnWidth(min: 168, ideal: 184, max: 220)
+        } detail: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    Text(selection.title).font(.title2.weight(.semibold))
+                    switch selection {
+                    case .general: GeneralSettings()
+                    case .capture: CaptureSettings()
+                    case .shortcuts: ShortcutSettings()
                     }
                 }
-                Divider()
-                Toggle("Автоматически сохранять снимки", isOn: $settings.autoSave)
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Папка")
-                        Text(settings.autoSaveFolder?.path(percentEncoded: false) ?? "Не выбрана")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                    }
-                    Spacer()
-                    Button("Выбрать…") { settings.chooseAutoSaveFolder() }
-                }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(26)
             }
-            .padding(24)
-            .tabItem { Label("Основные", systemImage: "switch.2") }
         }
-        .frame(minWidth: 540, minHeight: 400)
+    }
+}
+
+/// A titled block of related settings with an explanatory footer, replacing the
+/// run of bare dividers the old settings used.
+private struct SettingsGroup<Content: View>: View {
+    let title: String
+    var footer: String?
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title).font(.headline)
+            VStack(alignment: .leading, spacing: 13) { content }
+                .padding(15)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            if let footer {
+                Text(footer).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+private struct GeneralSettings: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var controller = AppController.shared
+
+    var body: some View {
+        SettingsGroup(title: "Запуск", footer: "Snipiko живёт в строке меню и не занимает место в Dock.") {
+            Toggle("Запускать при входе в систему", isOn: Binding(
+                get: { settings.launchAtLogin },
+                set: { settings.setLaunchAtLogin($0) }
+            ))
+        }
+        SettingsGroup(
+            title: "Доступ к записи экрана",
+            footer: "macOS применяет это разрешение только после перезапуска приложения."
+        ) {
+            HStack {
+                Label(
+                    controller.hasScreenPermission ? "Разрешён" : "Не разрешён",
+                    systemImage: controller.hasScreenPermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                )
+                .foregroundStyle(controller.hasScreenPermission ? Color.green : Color.orange)
+                Spacer()
+                Button("Системные настройки…") { ScreenPermission.openSettings() }
+            }
+        }
+    }
+}
+
+private struct CaptureSettings: View {
+    @ObservedObject private var settings = AppSettings.shared
+
+    var body: some View {
+        SettingsGroup(title: "Формат файлов", footer: "Снимок всегда попадает в буфер обмена в PNG; формат влияет на сохранение в файл.") {
+            HStack {
+                Text("Формат")
+                Spacer()
+                Picker("Формат", selection: $settings.exportFormat) {
+                    ForEach(ExportFormat.allCases) { format in Text(format.title).tag(format) }
+                }
+                .labelsHidden()
+                .frame(width: 110)
+            }
+            if settings.exportFormat == .jpeg {
+                HStack {
+                    Text("Качество")
+                    Slider(value: $settings.jpegQuality, in: 0.5...1, step: 0.05)
+                    Text("\(Int(settings.jpegQuality * 100))%")
+                        .monospacedDigit().foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
+                }
+            }
+        }
+        SettingsGroup(title: "Автосохранение", footer: "Каждый снимок дополнительно сохраняется в выбранную папку, не спрашивая.") {
+            Toggle("Сохранять снимки автоматически", isOn: $settings.autoSave)
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Папка")
+                    Text(settings.autoSaveFolder?.path(percentEncoded: false) ?? "Не выбрана")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer()
+                Button("Выбрать…") { settings.chooseAutoSaveFolder() }
+            }
+            .disabled(!settings.autoSave)
+        }
+    }
+}
+
+private struct ShortcutSettings: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var hotKeys = HotKeyManager.shared
+    @State private var conflictMessage: String?
+    @State private var probing: ShortcutAction?
+    @State private var probeResult: (action: ShortcutAction, reached: Bool)?
+
+    var body: some View {
+        SettingsGroup(
+            title: "Назначения",
+            footer: "Нажмите на сочетание и введите новое. Подойдёт F-клавиша либо сочетание с ⌘, ⌥ или ⌃."
+        ) {
+            ForEach(Array(ShortcutAction.allCases.enumerated()), id: \.element) { index, action in
+                if index > 0 { Divider() }
+                ShortcutRow(
+                    action: action,
+                    shortcut: settings.shortcuts[action] ?? nil,
+                    systemOwner: (settings.shortcuts[action] ?? nil).flatMap(SystemShortcuts.owner(of:)),
+                    registrationFailed: hotKeys.failedRegistrations.contains(action),
+                    isProbing: probing == action,
+                    probeReached: probeResult?.action == action ? probeResult?.reached : nil,
+                    onChange: { assign($0, to: action) },
+                    onProbe: { probe(action) }
+                )
+            }
+            if let conflictMessage {
+                Label(conflictMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+        SettingsGroup(
+            title: "Если сочетание не срабатывает",
+            footer: "macOS обрабатывает свои сочетания раньше программ, и узнать заранее, занято ли сочетание сторонним приложением, невозможно. Кнопка «Проверить» отвечает фактом: нажмите сочетание и увидите, дошло ли оно до Snipiko."
+        ) {
+            HStack {
+                Button("Сбросить все назначения") {
+                    settings.resetShortcuts()
+                    HotKeyManager.shared.registerAll()
+                    probeResult = nil
+                }
+                Spacer()
+            }
+        }
     }
 
     private func assign(_ shortcut: Shortcut?, to action: ShortcutAction) {
@@ -385,27 +480,80 @@ struct SettingsView: View {
             return
         }
         conflictMessage = nil
+        probeResult = nil
         settings.shortcuts[action] = shortcut
         HotKeyManager.shared.registerAll()
+    }
+
+    private func probe(_ action: ShortcutAction) {
+        probing = action
+        probeResult = nil
+        Task {
+            let reached = await HotKeyManager.shared.probe(action)
+            probing = nil
+            probeResult = (action, reached)
+        }
     }
 }
 
 private struct ShortcutRow: View {
     let action: ShortcutAction
     let shortcut: Shortcut?
+    /// What macOS uses this combination for, when it is one of the known ones.
+    let systemOwner: String?
+    let registrationFailed: Bool
+    let isProbing: Bool
+    /// Result of the last check for this row: true when the press arrived.
+    let probeReached: Bool?
     let onChange: (Shortcut?) -> Void
+    let onProbe: () -> Void
 
     var body: some View {
-        HStack {
-            Text(action.title)
-            Spacer()
-            HotKeyRecorder(shortcut: shortcut, onChange: onChange)
-                .frame(width: 116, height: 28)
-            Button { onChange(nil) } label: { Image(systemName: "xmark.circle.fill") }
-                .buttonStyle(.plain).foregroundStyle(.tertiary).help("Убрать назначение")
-                .disabled(shortcut == nil)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(action.title)
+                Spacer()
+                if shortcut != nil {
+                    Button(isProbing ? "Нажмите…" : "Проверить", action: onProbe)
+                        .buttonStyle(.link)
+                        .disabled(isProbing)
+                }
+                HotKeyRecorder(shortcut: shortcut, onChange: onChange)
+                    .frame(width: 116, height: 28)
+                Button { onChange(nil) } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain).foregroundStyle(.tertiary).help("Убрать назначение")
+                    .disabled(shortcut == nil)
+            }
+            if let note {
+                Label(note.text, systemImage: note.symbol)
+                    .font(.caption)
+                    .foregroundStyle(note.tint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
+    }
+
+    /// At most one note per row, worst news first: a failed registration beats a
+    /// suspected conflict, and both beat a stale check result.
+    private var note: (text: String, symbol: String, tint: Color)? {
+        if registrationFailed {
+            return ("Не удалось зарегистрировать сочетание — его уже занял кто-то другой.",
+                    "exclamationmark.triangle.fill", .orange)
+        }
+        if let systemOwner {
+            return ("Обычно занято \(systemOwner) в macOS — нажатие может не дойти до Snipiko.",
+                    "exclamationmark.triangle.fill", .orange)
+        }
+        if isProbing {
+            return ("Нажмите сочетание — жду до пяти секунд.", "keyboard", .secondary)
+        }
+        switch probeReached {
+        case true: return ("Сочетание доходит до Snipiko.", "checkmark.circle.fill", .green)
+        case false: return ("Нажатие не дошло: сочетание перехватывает другая программа.",
+                            "xmark.circle.fill", .orange)
+        case nil: return nil
+        }
     }
 }
 
