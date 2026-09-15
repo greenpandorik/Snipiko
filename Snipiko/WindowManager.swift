@@ -102,6 +102,68 @@ final class AppController: ObservableObject {
     }
 }
 
+/// How a window sizes and places itself the first time it opens.
+///
+/// Absolute point sizes do not travel between displays: 980x680 fills a 1512x982
+/// built-in screen but sits in the corner of a 2560x1440 monitor. Each window
+/// instead takes a share of whatever screen it opens on, bounded at both ends.
+enum WindowPlacement {
+    case editor, history, settings, picker, permission
+
+    var autosaveName: String {
+        switch self {
+        case .editor: "Snipiko.editor"
+        case .history: "Snipiko.history"
+        case .settings: "Snipiko.settings"
+        case .picker: "Snipiko.picker"
+        case .permission: "Snipiko.permission"
+        }
+    }
+
+    /// Share of the target screen's `visibleFrame`.
+    var fraction: CGSize {
+        switch self {
+        case .editor: CGSize(width: 0.80, height: 0.80)
+        case .history: CGSize(width: 0.62, height: 0.60)
+        case .settings: CGSize(width: 0.52, height: 0.58)
+        case .picker: CGSize(width: 0.50, height: 0.52)
+        case .permission: CGSize(width: 0, height: 0)
+        }
+    }
+
+    var minSize: NSSize {
+        switch self {
+        case .editor: NSSize(width: 680, height: 480)
+        case .history: NSSize(width: 620, height: 440)
+        case .settings: NSSize(width: 640, height: 480)
+        case .picker: NSSize(width: 560, height: 420)
+        case .permission: NSSize(width: 480, height: 360)
+        }
+    }
+
+    var maxSize: NSSize {
+        switch self {
+        case .editor: NSSize(width: 1800, height: 1150)
+        case .history: NSSize(width: 1400, height: 900)
+        case .settings: NSSize(width: 1000, height: 760)
+        case .picker: NSSize(width: 900, height: 700)
+        case .permission: NSSize(width: 480, height: 360)
+        }
+    }
+
+    /// A plain dialog has nothing to gain from scaling.
+    var isFixedSize: Bool { self == .permission }
+
+    func defaultSize(on screen: NSScreen) -> NSSize {
+        guard !isFixedSize else { return minSize }
+        let visible = screen.visibleFrame.size
+        return NSSize(
+            width: min(max(visible.width * fraction.width, minSize.width), maxSize.width),
+            height: min(max(visible.height * fraction.height, minSize.height), maxSize.height)
+        )
+    }
+}
+
 @MainActor
 final class WindowManager: NSObject, NSWindowDelegate {
     static let shared = WindowManager()
@@ -117,7 +179,7 @@ final class WindowManager: NSObject, NSWindowDelegate {
         if permissionWindow == nil {
             permissionWindow = makeWindow(
                 title: "Доступ к экрану",
-                size: NSSize(width: 480, height: 360),
+                placement: .permission,
                 rootView: AnyView(PermissionView())
             )
         }
@@ -143,20 +205,20 @@ final class WindowManager: NSObject, NSWindowDelegate {
 
     func showHistory() {
         if historyWindow == nil {
-            historyWindow = makeWindow(title: "История", size: NSSize(width: 720, height: 510), rootView: AnyView(HistoryView()))
+            historyWindow = makeWindow(title: "История", placement: .history, rootView: AnyView(HistoryView()))
         }
         show(historyWindow)
     }
 
     func showSettings() {
         if settingsWindow == nil {
-            settingsWindow = makeWindow(title: "Настройки", size: NSSize(width: 590, height: 470), rootView: AnyView(SettingsView()))
+            settingsWindow = makeWindow(title: "Настройки", placement: .settings, rootView: AnyView(SettingsView()))
         }
         show(settingsWindow)
     }
 
     func showWindowPicker() {
-        pickerWindow = makeWindow(title: "Выберите окно", size: NSSize(width: 590, height: 460), rootView: AnyView(WindowPickerView()))
+        pickerWindow = makeWindow(title: "Выберите окно", placement: .picker, rootView: AnyView(WindowPickerView()))
         show(pickerWindow)
     }
 
@@ -169,10 +231,9 @@ final class WindowManager: NSObject, NSWindowDelegate {
         guard let image = item.image?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
         let controller = makeWindow(
             title: item.filename,
-            size: NSSize(width: 980, height: 680),
+            placement: .editor,
             rootView: AnyView(EditorView(source: image, filename: item.filename))
         )
-        controller.window?.minSize = NSSize(width: 680, height: 480)
         editorWindows[item.id] = controller
         show(controller)
     }
@@ -253,7 +314,9 @@ final class WindowManager: NSObject, NSWindowDelegate {
         alert.runModal()
     }
 
-    private func makeWindow(title: String, size: NSSize, rootView: AnyView) -> NSWindowController {
+    private func makeWindow(title: String, placement: WindowPlacement, rootView: AnyView) -> NSWindowController {
+        let screen = Self.screenUnderPointer
+        let size = placement.defaultSize(on: screen)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -266,8 +329,44 @@ final class WindowManager: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentViewController = NSHostingController(rootView: rootView)
-        window.center()
+        window.minSize = placement.minSize
+
+        // A frame saved while a monitor was attached can land nowhere once it is
+        // unplugged, so a restored frame is only kept if it is still reachable.
+        let restored = window.setFrameUsingName(NSWindow.FrameAutosaveName(placement.autosaveName))
+        if !restored || !Self.isOnAnyScreen(window.frame) {
+            window.setFrame(NSRect(origin: .zero, size: size), display: false)
+            window.setFrameOrigin(Self.centeredOrigin(for: size, on: screen))
+        }
+        window.setFrameAutosaveName(NSWindow.FrameAutosaveName(placement.autosaveName))
         return NSWindowController(window: window)
+    }
+
+    /// Windows used to call `center()`, which centres on the screen holding the key
+    /// window -- with no key window, the menu bar's screen. On a multi-display setup
+    /// that meant every window opened on the built-in display regardless of where
+    /// the work was happening.
+    static var screenUnderPointer: NSScreen {
+        let pointer = NSEvent.mouseLocation
+        return NSScreen.screens.first { $0.frame.contains(pointer) }
+            ?? NSScreen.main
+            ?? NSScreen.screens[0]
+    }
+
+    private static func centeredOrigin(for size: NSSize, on screen: NSScreen) -> NSPoint {
+        let visible = screen.visibleFrame
+        return NSPoint(
+            x: visible.minX + (visible.width - size.width) / 2,
+            y: visible.minY + (visible.height - size.height) / 2
+        )
+    }
+
+    /// True when enough of the frame overlaps a screen to be grabbable.
+    private static func isOnAnyScreen(_ frame: NSRect) -> Bool {
+        NSScreen.screens.contains { screen in
+            let shared = screen.visibleFrame.intersection(frame)
+            return !shared.isNull && shared.width >= 120 && shared.height >= 60
+        }
     }
 
     private func show(_ controller: NSWindowController?) {
