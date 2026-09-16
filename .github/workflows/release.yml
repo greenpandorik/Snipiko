@@ -22,6 +22,8 @@ jobs:
     runs-on: macos-15
     permissions:
       contents: write
+    env:
+      CERTIFICATE_P12: ${{ secrets.SIGNING_CERTIFICATE_P12 }}
 
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +49,14 @@ jobs:
           fi
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare a signing identity
+      # Only runs when a certificate is actually stored. The fallback below signs
+      # ad-hoc instead of minting a certificate: a self-signed one has to be
+      # trusted before codesign will use it, and `security add-trusted-cert`
+      # blocks waiting for an authorisation prompt that never comes on a headless
+      # runner. Both paths give the same result for users anyway -- a fresh
+      # identity per release -- so the simpler one wins.
+      - name: Import the signing certificate
+        if: ${{ env.CERTIFICATE_P12 != '' }}
         env:
           CERTIFICATE_P12: ${{ secrets.SIGNING_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
@@ -59,43 +68,10 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-
-          if [ -n "${CERTIFICATE_P12:-}" ]; then
-            # A stored certificate keeps the app's identity stable between
-            # releases, so macOS does not drop the Screen Recording permission
-            # every time someone updates.
-            echo "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-            security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
-              -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -A
-            rm -f "$RUNNER_TEMP/cert.p12"
-          else
-            echo "::warning::No SIGNING_CERTIFICATE_P12 secret. Generating a throwaway certificate:"
-            echo "::warning::every release gets a new identity, so users must grant Screen Recording again after each update."
-            cat > "$RUNNER_TEMP/cs.cnf" <<'CNF'
-          [ req ]
-          distinguished_name = dn
-          x509_extensions    = v3
-          prompt             = no
-          [ dn ]
-          CN = Snipiko Local Dev
-          O  = Snipiko
-          C  = US
-          [ v3 ]
-          basicConstraints     = critical,CA:false
-          keyUsage             = critical,digitalSignature
-          extendedKeyUsage     = critical,codeSigning
-          subjectKeyIdentifier = hash
-          CNF
-            openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-              -keyout "$RUNNER_TEMP/key.pem" -out "$RUNNER_TEMP/cert.pem" -config "$RUNNER_TEMP/cs.cnf"
-            openssl pkcs12 -export -out "$RUNNER_TEMP/ident.p12" \
-              -inkey "$RUNNER_TEMP/key.pem" -in "$RUNNER_TEMP/cert.pem" \
-              -passout pass:snipiko -name "Snipiko Local Dev"
-            security import "$RUNNER_TEMP/ident.p12" -k "$KEYCHAIN" -P snipiko -T /usr/bin/codesign -A
-            security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$RUNNER_TEMP/cert.pem" || true
-            rm -f "$RUNNER_TEMP/key.pem" "$RUNNER_TEMP/ident.p12"
-          fi
-
+          printf '%s' "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -A
+          rm -f "$RUNNER_TEMP/cert.p12"
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
           security find-identity -v -p codesigning "$KEYCHAIN"
@@ -103,7 +79,12 @@ jobs:
       - name: Package
         env:
           VERSION: ${{ steps.version.outputs.value }}
-        run: scripts/package.sh "$VERSION"
+          SNIPIKO_IDENTITY: ${{ secrets.SIGNING_CERTIFICATE_P12 != '' && 'Snipiko Local Dev' || '-' }}
+        run: |
+          if [ "$SNIPIKO_IDENTITY" = "-" ]; then
+            echo "::warning::No SIGNING_CERTIFICATE_P12 secret: signing ad-hoc. The app identity changes every release, so users must grant Screen Recording again after each update."
+          fi
+          scripts/package.sh "$VERSION"
 
       - name: Publish the release
         uses: softprops/action-gh-release@v2

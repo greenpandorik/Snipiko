@@ -18,7 +18,8 @@ BUILT="$DERIVED/Build/Products/Release/Snipiko.app"
 OUT="$ROOT/dist"
 DMG="$OUT/Snipiko-$VERSION.dmg"
 
-if ! security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
+# "-" means ad-hoc: no certificate, used on CI when none is stored.
+if [ "$IDENTITY" != "-" ] && ! security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
     echo "Signing identity '$IDENTITY' not found. Run scripts/make-signing-cert.sh."
     exit 1
 fi
@@ -62,7 +63,7 @@ rm -f "$DMG"
 echo "Packaging $DMG..."
 hdiutil create -volname "Snipiko" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 
-codesign --force --sign "$IDENTITY" "$DMG" 2>/dev/null || true
+[ "$IDENTITY" = "-" ] || codesign --force --sign "$IDENTITY" "$DMG" 2>/dev/null || true
 
 echo
 echo "Готово: $DMG"
