@@ -1,0 +1,128 @@
+name: Release
+
+# Builds a DMG and attaches it to a GitHub release when a version tag is pushed:
+#
+#     git tag v0.2.0 && git push origin v0.2.0
+#
+# Snipiko has no Apple Developer ID, so the result is signed but not notarized.
+# Gatekeeper will refuse to open it until the user allows it by hand -- the DMG
+# carries instructions, and so does the release body below.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 0.2.0"
+        required: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both sources reach a shell, so neither is interpolated directly into the
+      # script and both must look like a version before going any further.
+      - name: Work out the version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${REF_NAME#v}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+)*$'; then
+            echo "Refusing version '$VERSION': expected digits and dots, like 0.2.0"
+            exit 1
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare a signing identity
+        env:
+          CERTIFICATE_P12: ${{ secrets.SIGNING_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          if [ -n "${CERTIFICATE_P12:-}" ]; then
+            # A stored certificate keeps the app's identity stable between
+            # releases, so macOS does not drop the Screen Recording permission
+            # every time someone updates.
+            echo "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+              -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -A
+            rm -f "$RUNNER_TEMP/cert.p12"
+          else
+            echo "::warning::No SIGNING_CERTIFICATE_P12 secret. Generating a throwaway certificate:"
+            echo "::warning::every release gets a new identity, so users must grant Screen Recording again after each update."
+            cat > "$RUNNER_TEMP/cs.cnf" <<'CNF'
+          [ req ]
+          distinguished_name = dn
+          x509_extensions    = v3
+          prompt             = no
+          [ dn ]
+          CN = Snipiko Local Dev
+          O  = Snipiko
+          C  = US
+          [ v3 ]
+          basicConstraints     = critical,CA:false
+          keyUsage             = critical,digitalSignature
+          extendedKeyUsage     = critical,codeSigning
+          subjectKeyIdentifier = hash
+          CNF
+            openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+              -keyout "$RUNNER_TEMP/key.pem" -out "$RUNNER_TEMP/cert.pem" -config "$RUNNER_TEMP/cs.cnf"
+            openssl pkcs12 -export -out "$RUNNER_TEMP/ident.p12" \
+              -inkey "$RUNNER_TEMP/key.pem" -in "$RUNNER_TEMP/cert.pem" \
+              -passout pass:snipiko -name "Snipiko Local Dev"
+            security import "$RUNNER_TEMP/ident.p12" -k "$KEYCHAIN" -P snipiko -T /usr/bin/codesign -A
+            security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$RUNNER_TEMP/cert.pem" || true
+            rm -f "$RUNNER_TEMP/key.pem" "$RUNNER_TEMP/ident.p12"
+          fi
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: scripts/package.sh "$VERSION"
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.value }}
+          files: dist/*.dmg
+          body: |
+            ## Установка
+
+            1. Скачайте DMG ниже и перетащите Snipiko в Applications.
+            2. При первом запуске macOS скажет, что не может проверить разработчика.
+               Это ожидаемо: приложение подписано, но не заверено в Apple —
+               у проекта нет платного Apple Developer ID.
+            3. Откройте Системные настройки → Конфиденциальность и безопасность,
+               пролистайте вниз и нажмите «Открыть всё равно» рядом с Snipiko.
+            4. Запустите снова, выдайте доступ к записи экрана и перезапустите Snipiko.
+
+            Если шаг 3 не срабатывает:
+
+                xattr -dr com.apple.quarantine /Applications/Snipiko.app
+
+            Требуется macOS 14 или новее.

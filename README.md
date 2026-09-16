@@ -2,6 +2,22 @@
 
 Snipiko is a native macOS screenshot utility for quickly capturing, marking up, copying, and sharing screenshots.
 
+## Install
+
+Download the latest DMG from [Releases](../../releases), drag Snipiko into
+Applications, and open it.
+
+macOS will say it cannot verify the developer. That is expected: the app is
+signed, but not notarized by Apple, because the project has no paid Apple
+Developer ID. To allow it, open **System Settings → Privacy & Security**, scroll
+to the bottom and press **Open Anyway** next to Snipiko. If that does not work:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Snipiko.app
+```
+
+Then grant Screen Recording access and restart Snipiko.
+
 ## Requirements
 
 - macOS 14 or later
@@ -37,9 +53,27 @@ stops matching and the onboarding window comes back. With the certificate the
 requirement is `identifier "com.mihailvolkov.snipiko" and certificate root = H"..."`,
 which survives rebuilds.
 
-Consequences: the app runs only on this machine. Distributing it needs a real
-Apple Developer ID — set `DEVELOPMENT_TEAM` and `CODE_SIGN_IDENTITY` in the
-project. If the grant ever misbehaves, reset it and rebuild:
+Consequences: Gatekeeper on anyone else's Mac rejects the app until they allow
+it by hand — verified with `spctl`, which reports `rejected, origin=Snipiko
+Local Dev` even though the signature itself is valid. Clean, warning-free
+installs need a paid Apple Developer ID and notarization; set
+`DEVELOPMENT_TEAM` and `CODE_SIGN_IDENTITY` in the project and run the DMG
+through `notarytool`.
+
+## Releasing
+
+`scripts/package.sh [version]` builds a signed DMG into `dist/`. Pushing a tag
+runs the same script on CI and attaches the result to a GitHub release:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Without a `SIGNING_CERTIFICATE_P12` repository secret, CI generates a throwaway
+certificate for each build. That works, but the app's identity changes every
+release, and macOS ties the Screen Recording grant to that identity — so users
+would have to grant it again after each update. Storing the certificate as a
+secret avoids that. If the grant ever misbehaves, reset it and rebuild:
 
 ```sh
 tccutil reset ScreenCapture com.mihailvolkov.snipiko
@@ -70,6 +104,23 @@ Snipiko runs in the macOS menu bar. Closing its windows leaves it running; use *
 # Snipiko (по-русски)
 
 Snipiko — нативная утилита для macOS: быстро снять скриншот, разметить его, скопировать и поделиться.
+
+## Установка
+
+Скачайте свежий DMG из раздела [Releases](../../releases), перетащите Snipiko в
+Applications и запустите.
+
+macOS скажет, что не может проверить разработчика. Так и должно быть:
+приложение подписано, но не заверено в Apple — платного Apple Developer ID у
+проекта нет. Чтобы разрешить запуск, откройте **Системные настройки →
+Конфиденциальность и безопасность**, пролистайте вниз и нажмите **«Открыть всё
+равно»** рядом со Snipiko. Если не помогает:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Snipiko.app
+```
+
+Дальше выдайте доступ к записи экрана и перезапустите Snipiko.
 
 ## Требования
 
@@ -105,9 +156,25 @@ requirement* приложения. Без сертификата это треб
 онбординга возвращается. С сертификатом требование выглядит как
 `identifier "com.mihailvolkov.snipiko" and certificate root = H"..."` и переживает пересборки.
 
-Ограничения: приложение работает только на этой машине. Чтобы раздавать его другим, нужен
-настоящий Apple Developer ID — тогда пропишите `DEVELOPMENT_TEAM` и `CODE_SIGN_IDENTITY`
-в проекте. Если разрешение всё-таки начнёт чудить, сбросьте его и пересоберите:
+Последствия: на чужом Mac Gatekeeper отказывается открывать приложение, пока человек не
+разрешит его вручную — проверено через `spctl`, который выдаёт `rejected, origin=Snipiko
+Local Dev`, хотя сама подпись при этом корректна. Чтобы установка шла без единого
+предупреждения, нужен платный Apple Developer ID и нотаризация: прописать
+`DEVELOPMENT_TEAM` и `CODE_SIGN_IDENTITY` в проекте и прогнать DMG через `notarytool`.
+
+## Выпуск релиза
+
+`scripts/package.sh [версия]` собирает подписанный DMG в `dist/`. Пуш тега запускает тот же
+скрипт на CI и прикрепляет результат к релизу на GitHub:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Без секрета `SIGNING_CERTIFICATE_P12` в репозитории CI генерирует одноразовый сертификат на
+каждую сборку. Это работает, но личность приложения меняется от релиза к релизу, а macOS
+привязывает к ней разрешение на запись экрана — значит после каждого обновления его придётся
+выдавать заново. Сертификат, положенный в секрет, эту проблему снимает. Если разрешение всё-таки начнёт чудить, сбросьте его и пересоберите:
 
 ```sh
 tccutil reset ScreenCapture com.mihailvolkov.snipiko
