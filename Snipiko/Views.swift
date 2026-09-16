@@ -750,12 +750,13 @@ private struct ShortcutRow: View {
         if isProbing {
             return ("Нажмите сочетание — жду до пяти секунд.", "keyboard", .secondary)
         }
-        switch probeReached {
-        case true: return ("Сочетание доходит до Snipiko.", "checkmark.circle.fill", .green)
-        case false: return ("Нажатие не дошло: сочетание перехватывает другая программа.",
-                            "xmark.circle.fill", .orange)
-        case nil: return nil
-        }
+        // Unwrapped rather than switched over: older Swift compilers do not accept
+        // true/false/nil over an optional Bool as exhaustive, and the project has to
+        // build on whatever Xcode the CI runner carries.
+        guard let probeReached else { return nil }
+        return probeReached
+            ? ("Сочетание доходит до Snipiko.", "checkmark.circle.fill", .green)
+            : ("Нажатие не дошло: сочетание перехватывает другая программа.", "xmark.circle.fill", .orange)
     }
 }
 

@@ -1,0 +1,51 @@
+name: Build
+
+# Compiles on every push and pull request.
+#
+# This exists because a release build failed on something that cannot happen
+# locally: the runner carries an older Xcode than the development machine, and
+# Swift's exhaustiveness rules differ between them. Catching that at push time
+# beats finding it after a tag is already public.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the toolchain
+        run: xcodebuild -version
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          LOG="$(mktemp)"
+          xcodebuild -project Snipiko.xcodeproj -scheme Snipiko -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            build > "$LOG" 2>&1 || {
+              echo "Compiler errors:"
+              grep -E "error:" "$LOG" | sort -u | head -40
+              echo "--- last lines ---"
+              tail -20 "$LOG"
+              exit 1
+            }
+          echo "OK"
+
+      - name: Check the signature and entitlements
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/dd/Build/Products/Release/Snipiko.app"
+          codesign --verify --strict --verbose=2 "$APP"
+          # The sandbox only applies if the entitlements actually land in the
+          # bundle, and a build with signing disabled silently drops them.
+          codesign -d --entitlements - "$APP" 2>&1 | grep -q app-sandbox
+          echo "signature and entitlements OK"
