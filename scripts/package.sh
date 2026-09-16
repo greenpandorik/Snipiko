@@ -24,6 +24,7 @@ if [ "$IDENTITY" != "-" ] && ! security find-identity -v -p codesigning | grep -
     exit 1
 fi
 
+LOG="$(mktemp)"
 echo "Building $VERSION..."
 rm -rf "$DERIVED"
 xcodebuild -project "$ROOT/Snipiko.xcodeproj" -scheme Snipiko -configuration Release \
@@ -32,7 +33,13 @@ xcodebuild -project "$ROOT/Snipiko.xcodeproj" -scheme Snipiko -configuration Rel
     CODE_SIGN_IDENTITY="$IDENTITY" \
     MARKETING_VERSION="$VERSION" \
     OTHER_CODE_SIGN_FLAGS="--timestamp=none" \
-    build >/dev/null
+    build > "$LOG" 2>&1 || {
+        echo "Build failed. Compiler errors:"
+        grep -E "error:" "$LOG" | head -40
+        echo "--- last lines ---"
+        tail -20 "$LOG"
+        exit 1
+    }
 
 codesign --verify --strict "$BUILT"
 codesign -d --entitlements - "$BUILT" 2>&1 | grep -q app-sandbox \
