@@ -99,6 +99,10 @@ Snipiko runs in the macOS menu bar. Closing its windows leaves it running; use *
 - Optional Launch at Login
 - Screen Recording permission onboarding and recovery
 
+## License
+
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Mihail Volkov.
+
 ---
 
 # Snipiko (по-русски)
@@ -199,3 +203,11 @@ Snipiko живёт в строке меню macOS. Закрытие окон н�
 - Редактор разметки: стрелки, прямоугольники, текст, выделение маркером, непрозрачное затирание, обрезка, отмена и повтор действия
 - Опциональный автозапуск при входе в систему
 - Онбординг и восстановление разрешения на запись экрана
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE). Copyright (c) 2026 Mihail Volkov.
+
+Пользоваться, изменять и распространять можно свободно, в том числе в коммерческих
+проектах. Единственное условие — сохранять текст лицензии и указание авторства в копиях
+и производных работах.
